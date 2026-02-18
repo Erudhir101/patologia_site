@@ -168,7 +168,7 @@ def get_api_data(cod_requisicao_input):
 def generate_ai_response(api_output_text, procedimentos_cobrados):
     """ Gera a análise da IA com base nos dados do laudo. """
     try:
-        model_name = "gemini-2.5-flash"
+        model_name = "gemini-1.5-flash"
         genai_model = GenerativeModel(model_name)
 
         prompt_text = f"""Analise o seguinte laudo de patologia e os procedimentos cobrados pela API. Gere uma tabela Markdown com as colunas 'CodRequisicao', 'Código', 'Quantidade', seguindo as regras abaixo. Responda com a tabela Markdown, e com justificativas curtas.
@@ -222,7 +222,15 @@ Tabela Markdown de Saída (exemplo):
             stream=False,
         )
 
-        ai_response_text = responses.candidates[0].content.parts[0].text
+        # Acesso seguro à resposta
+        if hasattr(responses, 'candidates') and len(responses.candidates) > 0:
+            candidate = responses.candidates[0]
+            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and len(candidate.content.parts) > 0:
+                ai_response_text = candidate.content.parts[0].text
+            else:
+                ai_response_text = "IA não gerou conteúdo de resposta."
+        else:
+            ai_response_text = "Resposta sem candidatos do Vertex AI."
 
         # Formatação dos procedimentos cobrados para exibição (em Markdown)
         formatted_procedimentos_cobrados = ""
