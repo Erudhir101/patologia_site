@@ -89,13 +89,19 @@ def get_api_data(cod_requisicao_input):
 
         try:
             resposta_json = response.json()
+            
+            # Garante que a resposta seja um dicionário
+            if not isinstance(resposta_json, dict):
+                output_lines.append(f"Erro: Resposta da API inesperada (não é um objeto JSON).")
+                return "\n\n".join(output_lines), []
 
             # Debug: Imprimir resposta bruta no console para verificação
             print(f"DEBUG - Resposta API para {cod_requisicao_input}:")
             print(json.dumps(resposta_json, indent=2, ensure_ascii=False))
 
-            if resposta_json.get("dat") and resposta_json["dat"].get("sucesso") == 1:
-                dados = resposta_json["dat"]
+            dat_obj = resposta_json.get("dat")
+            if isinstance(dat_obj, dict) and dat_obj.get("sucesso") == 1:
+                dados = dat_obj
                 print(f"DEBUG - Chaves em 'dat': {list(dados.keys())}")
                 output_lines.append(f"**Código da Requisição:** `{dados.get('codRequisicao', 'N/A')}`")
 
@@ -145,7 +151,11 @@ def get_api_data(cod_requisicao_input):
                     output_lines.append(f"```json\n{json.dumps(procedimentos, indent=2, ensure_ascii=False)}\n```")
 
             else:
-                msg_erro = resposta_json.get("dat", {}).get("msg", "Resposta sem sucesso ou dados inválidos.")
+                dat_val = resposta_json.get("dat")
+                if isinstance(dat_val, dict):
+                    msg_erro = dat_val.get("msg", "Resposta sem sucesso ou dados inválidos.")
+                else:
+                    msg_erro = str(dat_val) if dat_val else "Resposta sem sucesso ou dados inválidos."
                 output_lines.append(f"Erro na API: {msg_erro}")
 
         except (ValueError, json.JSONDecodeError):
@@ -214,20 +224,25 @@ Tabela Markdown de Saída (exemplo):
 
         ai_response_text = responses.candidates[0].content.parts[0].text
 
+        # Formatação dos procedimentos cobrados para exibição (em Markdown)
+        formatted_procedimentos_cobrados = ""
+        if isinstance(procedimentos_cobrados, list):
+            formatted_procedimentos_cobrados = "### Procedimentos Cobrados (API)\n\n"
+            for proc in procedimentos_cobrados:
+                # Verifica se proc é um dicionário antes de chamar .get()
+                if isinstance(proc, dict):
+                    formatted_procedimentos_cobrados += (
+                        f"*   **Código:** `{proc.get('codigo', '')}`\n"
+                        f"*   **Descrição:** {proc.get('descricao', '')}\n"
+                        f"*   **Quantidade:** {proc.get('quantidade', '')}\n"
+                        f"*   **Valor Total:** R$ {proc.get('valorTotal', '')}\n\n---\n\n"
+                    )
+                else:
+                    formatted_procedimentos_cobrados += f"*   Dado inválido: `{proc}`\n\n---\n\n"
+
     except Exception as e:
         ai_response_text = f"Erro ao gerar resposta da IA: {e}"
-
-    # Formatação dos procedimentos cobrados para exibição (em Markdown)
-    formatted_procedimentos_cobrados = ""
-    if procedimentos_cobrados:
-        formatted_procedimentos_cobrados = "### Procedimentos Cobrados (API)\n\n"
-        for proc in procedimentos_cobrados:
-            formatted_procedimentos_cobrados += (
-                f"*   **Código:** `{proc.get('codigo', '')}`\n"
-                f"*   **Descrição:** {proc.get('descricao', '')}\n"
-                f"*   **Quantidade:** {proc.get('quantidade', '')}\n"
-                f"*   **Valor Total:** R$ {proc.get('valorTotal', '')}\n\n---\n\n"
-            )
+        formatted_procedimentos_cobrados = ""
 
     return ai_response_text, formatted_procedimentos_cobrados
 
