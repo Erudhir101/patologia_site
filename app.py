@@ -14,18 +14,45 @@ CREDENTIALS_FILE = 'spry-catcher-449921-h8-bbc989e73ec4.json'
 PROJECT_ID = "spry-catcher-449921-h8"
 REGION = "us-central1"
 
+_vertex_initialized = False
+
 def init_vertex_ai():
     """Inicializa o Vertex AI com as credenciais."""
+    global _vertex_initialized
+    if _vertex_initialized:
+        return True
+
     try:
         # Tenta carregar de variável de ambiente (Seguro para Vercel)
         creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
         if creds_json:
+            creds_json = creds_json.strip()
             # No Vercel, apenas o diretório /tmp é gravável
             temp_path = "/tmp/temp_creds.json"
-            with open(temp_path, "w") as f:
-                f.write(creds_json)
+            
+            try:
+                # Tenta carregar para validar
+                creds_data = json.loads(creds_json)
+                with open(temp_path, "w") as f:
+                    json.dump(creds_data, f)
+            except json.JSONDecodeError as e:
+                # Se houver "Extra data", extrai apenas a parte válida
+                if "Extra data" in str(e) and hasattr(e, 'pos'):
+                    try:
+                        valid_json = creds_json[:e.pos].strip()
+                        creds_data = json.loads(valid_json)
+                        with open(temp_path, "w") as f:
+                            json.dump(creds_data, f)
+                    except:
+                        with open(temp_path, "w") as f:
+                            f.write(creds_json)
+                else:
+                    with open(temp_path, "w") as f:
+                        f.write(creds_json)
+
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path
             vertexai.init(project=PROJECT_ID, location=REGION)
+            _vertex_initialized = True
             return True
 
         # Fallback para o arquivo local
@@ -35,6 +62,7 @@ def init_vertex_ai():
         if os.path.exists(credentials_path):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
             vertexai.init(project=PROJECT_ID, location=REGION)
+            _vertex_initialized = True
             return True
         else:
             print(f"Aviso: Arquivo de credenciais não encontrado em {credentials_path}")
