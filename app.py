@@ -179,7 +179,7 @@ def get_api_data(cod_requisicao_input):
 def generate_ai_response(api_output_text, procedimentos_cobrados):
     """ Gera a análise da IA com base nos dados do laudo. """
     try:
-        model_name = "gemini-1.5-flash"
+        model_name = "gemini-2.5-flash"
         genai_model = GenerativeModel(model_name)
 
         prompt_text = f"""Analise o seguinte laudo de patologia e os procedimentos cobrados pela API. Gere uma tabela Markdown com as colunas 'CodRequisicao', 'Código', 'Quantidade', seguindo as regras abaixo. Responda com a tabela Markdown, e com justificativas curtas.
