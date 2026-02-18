@@ -26,16 +26,24 @@ def init_vertex_ai():
         # Tenta carregar de variável de ambiente (Seguro para Vercel)
         creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
         if creds_json:
+            print("DEBUG: GOOGLE_CREDENTIALS_JSON encontrada.")
             creds_json = creds_json.strip()
+            # Remove aspas se a string estiver envolvida por elas (comum em alguns ambientes)
+            if (creds_json.startswith('"') and creds_json.endswith('"')) or \
+               (creds_json.startswith("'") and creds_json.endswith("'")):
+                creds_json = creds_json[1:-1]
+            
             # No Vercel, apenas o diretório /tmp é gravável
             temp_path = "/tmp/temp_creds.json"
             
             try:
-                # Tenta carregar para validar
+                # Tenta carregar para validar se é JSON válido
                 creds_data = json.loads(creds_json)
                 with open(temp_path, "w") as f:
                     json.dump(creds_data, f)
+                print("DEBUG: JSON de credenciais validado e salvo em /tmp/temp_creds.json")
             except json.JSONDecodeError as e:
+                print(f"DEBUG: Erro ao decodar JSON: {e}")
                 # Se houver "Extra data", extrai apenas a parte válida
                 if "Extra data" in str(e) and hasattr(e, 'pos'):
                     try:
@@ -43,6 +51,7 @@ def init_vertex_ai():
                         creds_data = json.loads(valid_json)
                         with open(temp_path, "w") as f:
                             json.dump(creds_data, f)
+                        print(f"DEBUG: JSON parcial validado (pos {e.pos})")
                     except:
                         with open(temp_path, "w") as f:
                             f.write(creds_json)
@@ -53,6 +62,7 @@ def init_vertex_ai():
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path
             vertexai.init(project=PROJECT_ID, location=REGION)
             _vertex_initialized = True
+            print("DEBUG: Vertex AI inicializado com variável de ambiente.")
             return True
 
         # Fallback para o arquivo local
@@ -63,12 +73,13 @@ def init_vertex_ai():
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
             vertexai.init(project=PROJECT_ID, location=REGION)
             _vertex_initialized = True
+            print(f"DEBUG: Vertex AI inicializado com arquivo local: {credentials_path}")
             return True
         else:
             print(f"Aviso: Arquivo de credenciais não encontrado em {credentials_path}")
             return False
     except Exception as e:
-        print(f"Erro ao inicializar o Vertex AI: {e}")
+        print(f"Erro crítico ao inicializar o Vertex AI: {e}")
         return False
 # Inicializa ao iniciar a aplicação
 init_vertex_ai()
