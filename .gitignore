@@ -1,0 +1,16 @@
+# Python dependencies
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Google Credentials (VERY IMPORTANT: DO NOT PUSH)
+spry-catcher-449921-h8-bbc989e73ec4.json
+temp_creds.json
+
+# Environment variables
+.env
+
+# OS-specific files
+.DS_Store
+Thumbs.db

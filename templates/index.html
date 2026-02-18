@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analisador de Patologia - IA</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="main-container">
+        <header class="header">
+            <div class="logo-area">
+                <span class="icon">🧬</span>
+                <h1>Patologia</h1>
+            </div>
+            <p class="subtitle">Análise automatizada de laudos e procedimentos</p>
+        </header>
+
+        <section class="search-section">
+            <form action="/" method="POST" class="search-form">
+                <div class="input-group">
+                    <input type="text" name="codrequisicao" placeholder="Digite o Código da Requisição..."
+                        value="{{ cod_requisicao_input }}" required>
+                    <button type="submit">
+                        <span class="btn-text">Analisar</span>
+                        <span class="loader"></span>
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        {% if cod_requisicao_input %}
+        <div class="results-container">
+
+            <!-- Resultado da IA -->
+            <div class="card ai-card">
+                <div class="card-header">
+                    <h2>🤖 Análise da IA</h2>
+                </div>
+                <div class="card-content">
+                    {% if ai_output %}
+                    <div class="markdown-body">
+                        {{ ai_output | safe }}
+                    </div>
+                    {% else %}
+                    <p class="empty-state">Aguardando análise...</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="grid-row">
+                <!-- Dados da API -->
+                <div class="card api-card">
+                    <div class="card-header">
+                        <h2>📄 Dados da Requisição</h2>
+                    </div>
+                    <div class="card-content markdown-body">
+                        {{ api_output | safe }}
+                    </div>
+                </div>
+
+                <!-- Procedimentos Cobrados -->
+                <div class="card proc-card">
+                    <div class="card-header">
+                        <h2>💰 Pagamento Atual do Aplis</h2>
+                    </div>
+                    <div class="card-content markdown-body">
+                        {{ proc_output | safe }}
+                    </div>
+                </div>
+            </div>
+
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        const form = document.querySelector('.search-form');
+        const button = form.querySelector('button');
+
+        form.addEventListener('submit', () => {
+            button.classList.add('loading');
+        });
+    </script>
+</body>
+
+</html>
