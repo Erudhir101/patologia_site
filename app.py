@@ -20,16 +20,18 @@ def init_vertex_ai():
         # Tenta carregar de variável de ambiente (Seguro para Vercel)
         creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
         if creds_json:
-            with open("temp_creds.json", "w") as f:
+            # No Vercel, apenas o diretório /tmp é gravável
+            temp_path = "/tmp/temp_creds.json"
+            with open(temp_path, "w") as f:
                 f.write(creds_json)
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "temp_creds.json"
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path
             vertexai.init(project=PROJECT_ID, location=REGION)
             return True
 
         # Fallback para o arquivo local
         base_dir = os.path.dirname(os.path.abspath(__file__))
         credentials_path = os.path.join(base_dir, CREDENTIALS_FILE)
-        
+
         if os.path.exists(credentials_path):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
             vertexai.init(project=PROJECT_ID, location=REGION)
@@ -59,18 +61,18 @@ def get_api_data(cod_requisicao_input):
 
         try:
             resposta_json = response.json()
-            
+
             # Debug: Imprimir resposta bruta no console para verificação
             print(f"DEBUG - Resposta API para {cod_requisicao_input}:")
-            print(json.dumps(resposta_json, indent=2, ensure_ascii=False)) 
+            print(json.dumps(resposta_json, indent=2, ensure_ascii=False))
 
             if resposta_json.get("dat") and resposta_json["dat"].get("sucesso") == 1:
                 dados = resposta_json["dat"]
                 print(f"DEBUG - Chaves em 'dat': {list(dados.keys())}")
                 output_lines.append(f"**Código da Requisição:** `{dados.get('codRequisicao', 'N/A')}`")
-                
+
                 procedimentos = dados.get("procedimentos", [])
-                
+
                 # Variável para rastrear se encontramos dados detalhados
                 encontrou_detalhes = False
 
@@ -81,19 +83,19 @@ def get_api_data(cod_requisicao_input):
                             encontrou_detalhes = True
                             output_lines.append(f"\n### Topografia: {topografia.get('nome', '')}")
                             output_lines.append(f"**Laudo Macro:** {topografia.get('laudoMacro', '')}")
-                            
+
                             diagnosticos = topografia.get("diagnosticos", [])
                             for diagnostico in diagnosticos:
                                 output_lines.append(f"\n> **Diagnóstico:** {diagnostico.get('titulo', '')}")
                                 output_lines.append(f"> **Laudo Micro:** {diagnostico.get('laudoMicro', '')}")
-                            
+
                             if "cassetes" in topografia:
                                 for cassete in topografia["cassetes"]:
                                     coloracoes = cassete.get("coloracoes")
                                     if coloracoes:
                                         for coloracao in coloracoes:
                                             output_lines.append(f"*   **Coloração:** {coloracao.get('nome', '')}")
-                    
+
                     # 2. Fallback: Tenta procurar chaves direto no procedimento (caso a estrutura mude)
                     if not encontrou_detalhes:
                          if "laudoMacro" in procedimento:
@@ -106,7 +108,7 @@ def get_api_data(cod_requisicao_input):
                                 encontrou_detalhes = True
 
                 procedimentos_cobrados = dados.get("procedimentosCobrados", [])
-                
+
                 # 3. Fallback Final: Se não extraiu quase nada, anexa o JSON bruto dos procedimentos
                 # Isso garante que a IA receba o texto mesmo se nossa lógica de chaves estiver errada
                 if not encontrou_detalhes or len(output_lines) < 5:
@@ -117,7 +119,7 @@ def get_api_data(cod_requisicao_input):
             else:
                 msg_erro = resposta_json.get("dat", {}).get("msg", "Resposta sem sucesso ou dados inválidos.")
                 output_lines.append(f"Erro na API: {msg_erro}")
-                
+
         except (ValueError, json.JSONDecodeError):
             output_lines.append("Resposta da API não está em formato JSON válido: " + response.text)
 
@@ -128,7 +130,7 @@ def get_api_data(cod_requisicao_input):
 def generate_ai_response(api_output_text, procedimentos_cobrados):
     """ Gera a análise da IA com base nos dados do laudo. """
     try:
-        model_name = "gemini-2.5-flash" 
+        model_name = "gemini-2.5-flash"
         genai_model = GenerativeModel(model_name)
 
         prompt_text = f"""Analise o seguinte laudo de patologia e os procedimentos cobrados pela API. Gere uma tabela Markdown com as colunas 'CodRequisicao', 'Código', 'Quantidade', seguindo as regras abaixo. Responda com a tabela Markdown, e com justificativas curtas.
@@ -150,22 +152,22 @@ Regras de Classificação e Contagem:
     * Dutos
 3.  Colorações Especiais (40601269): Conte 1x 40601269 para cada nome de coloração listado na seção 'Coloração:' que NÃO seja 'HE' . Nomes válidos: Alcian Blue, Azul de Toluidina, Fontana-Masson, Giemsa, Gram, Grocott, Tricômio de Masson, Verheoff, Vermelho Congo.
 4.  Citopatologia (se aplicável, baseado na descrição geral, não detalhado no exemplo):
-    * 40601129 (Citopatológico Oncótico de Líquidos/Raspados) 
+    * 40601129 (Citopatológico Oncótico de Líquidos/Raspados)
     * 40601137 (Citopatologia Cervicovaginal)
-5.  CodRequisicao: Use o código da requisição fornecido no texto.   
+5.  CodRequisicao: Use o código da requisição fornecido no texto.
 
 Texto do Laudo:
 {api_output_text}
 
 Procedimentos Cobrados pela API (apenas para referência, não use para a sua tabela):
 {json.dumps(procedimentos_cobrados, indent=2)}
-    
+
 Tabela Markdown de Saída (exemplo):
 | CodRequisicao | Código | Quantidade |
 | :--- | :--- | :--- |
 | 12345 | 40601110 | 1 |
 """
-        
+
         contents = [Content(role="user", parts=[Part.from_text(text=prompt_text)])]
         generation_config = GenerationConfig(temperature=0.2, max_output_tokens=8192)
         safety_settings = [
@@ -181,7 +183,7 @@ Tabela Markdown de Saída (exemplo):
             safety_settings=safety_settings,
             stream=False,
         )
-        
+
         ai_response_text = responses.candidates[0].content.parts[0].text
 
     except Exception as e:
@@ -215,10 +217,10 @@ def index():
             return redirect(url_for('index', codrequisicao=cod_requisicao_input))
         else:
             api_output = "Por favor, insira o Código da Requisição."
-    
+
     if cod_requisicao_input:
         api_output, procedimentos_cobrados = get_api_data(cod_requisicao_input)
-        
+
         if not api_output.startswith("Erro") and "sem sucesso" not in api_output:
             # Inicializa Vertex AI se necessário (caso não tenha inicializado no começo)
             init_vertex_ai()
