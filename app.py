@@ -1,88 +1,84 @@
 import os
 import json
+import time
+import threading
 import requests
 import markdown
 from flask import Flask, request, render_template, redirect, url_for
-import vertexai
-from vertexai.generative_models import GenerativeModel, Part, Content, GenerationConfig, SafetySetting
+from google import genai
+from google.genai import types
+from google.api_core import exceptions as google_exceptions
 
 app = Flask(__name__)
 
+# Rate limiter para a API Gemini (máximo 8 requisições por minuto)
+class RateLimiter:
+    def __init__(self, max_calls, period):
+        self.max_calls = max_calls
+        self.period = period
+        self.calls = []
+        self.lock = threading.Lock()
+
+    def wait(self):
+        with self.lock:
+            now = time.time()
+            self.calls = [c for c in self.calls if now - c < self.period]
+            if len(self.calls) >= self.max_calls:
+                sleep_time = self.period - (now - self.calls[0])
+                if sleep_time > 0:
+                    print(f"DEBUG: Rate limit atingido. Aguardando {sleep_time:.1f}s...")
+                    time.sleep(sleep_time)
+            self.calls.append(time.time())
+
+_rate_limiter = RateLimiter(max_calls=8, period=60)
+
 # Configuração do Vertex AI
-# Certifique-se de que o arquivo de credenciais esteja na raiz do projeto ou configure a variável de ambiente corretamente.
 CREDENTIALS_FILE = 'spry-catcher-449921-h8-bbc989e73ec4.json'
 PROJECT_ID = "spry-catcher-449921-h8"
-REGION = "us-central1"
+REGION = "global"  # Endpoint global reduz erros 429 por não estar preso a uma região
 
-_vertex_initialized = False
+_genai_client = None
 
-def init_vertex_ai():
-    """Inicializa o Vertex AI com as credenciais."""
-    global _vertex_initialized
-    if _vertex_initialized:
+def init_genai_client():
+    """Inicializa o cliente google-genai com as credenciais do Vertex AI."""
+    global _genai_client
+    if _genai_client is not None:
         return True
 
     try:
-        # Tenta carregar de variável de ambiente (Seguro para Vercel)
+        # Prioridade 1: variável de ambiente com JSON (Vercel/produção)
         creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
         if creds_json:
-            print("DEBUG: GOOGLE_CREDENTIALS_JSON encontrada.")
-            creds_json = creds_json.strip()
-            # Remove aspas se a string estiver envolvida por elas (comum em alguns ambientes)
-            if (creds_json.startswith('"') and creds_json.endswith('"')) or \
-               (creds_json.startswith("'") and creds_json.endswith("'")):
-                creds_json = creds_json[1:-1]
-            
-            # No Vercel, apenas o diretório /tmp é gravável
+            creds_json = creds_json.strip().strip('"').strip("'")
             temp_path = "/tmp/temp_creds.json"
-            
             try:
-                # Tenta carregar para validar se é JSON válido
                 creds_data = json.loads(creds_json)
                 with open(temp_path, "w") as f:
                     json.dump(creds_data, f)
-                print("DEBUG: JSON de credenciais validado e salvo em /tmp/temp_creds.json")
-            except json.JSONDecodeError as e:
-                print(f"DEBUG: Erro ao decodar JSON: {e}")
-                # Se houver "Extra data", extrai apenas a parte válida
-                if "Extra data" in str(e) and hasattr(e, 'pos'):
-                    try:
-                        valid_json = creds_json[:e.pos].strip()
-                        creds_data = json.loads(valid_json)
-                        with open(temp_path, "w") as f:
-                            json.dump(creds_data, f)
-                        print(f"DEBUG: JSON parcial validado (pos {e.pos})")
-                    except:
-                        with open(temp_path, "w") as f:
-                            f.write(creds_json)
-                else:
-                    with open(temp_path, "w") as f:
-                        f.write(creds_json)
-
+            except json.JSONDecodeError:
+                with open(temp_path, "w") as f:
+                    f.write(creds_json)
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path
-            vertexai.init(project=PROJECT_ID, location=REGION)
-            _vertex_initialized = True
-            print("DEBUG: Vertex AI inicializado com variável de ambiente.")
+            _genai_client = genai.Client(vertexai=True, project=PROJECT_ID, location=REGION)
+            print("DEBUG: client inicializado com GOOGLE_CREDENTIALS_JSON.")
             return True
 
-        # Fallback para o arquivo local
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        credentials_path = os.path.join(base_dir, CREDENTIALS_FILE)
-
+        # Prioridade 2: arquivo local de credenciais
+        credentials_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CREDENTIALS_FILE)
         if os.path.exists(credentials_path):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-            vertexai.init(project=PROJECT_ID, location=REGION)
-            _vertex_initialized = True
-            print(f"DEBUG: Vertex AI inicializado com arquivo local: {credentials_path}")
+            _genai_client = genai.Client(vertexai=True, project=PROJECT_ID, location=REGION)
+            print(f"DEBUG: client inicializado com arquivo local: {credentials_path}")
             return True
-        else:
-            print(f"Aviso: Arquivo de credenciais não encontrado em {credentials_path}")
-            return False
-    except Exception as e:
-        print(f"Erro crítico ao inicializar o Vertex AI: {e}")
+
+        print(f"Erro: arquivo de credenciais não encontrado em {credentials_path}")
         return False
+    except Exception as e:
+        print(f"Erro crítico ao inicializar o google-genai client: {e}")
+        return False
+
 # Inicializa ao iniciar a aplicação
-init_vertex_ai()
+init_genai_client()
 
 def get_api_data(cod_requisicao_input):
     """ Busca os dados da API externa de patologia. """
@@ -100,13 +96,11 @@ def get_api_data(cod_requisicao_input):
 
         try:
             resposta_json = response.json()
-            
-            # Garante que a resposta seja um dicionário
+
             if not isinstance(resposta_json, dict):
-                output_lines.append(f"Erro: Resposta da API inesperada (não é um objeto JSON).")
+                output_lines.append("Erro: Resposta da API inesperada (não é um objeto JSON).")
                 return "\n\n".join(output_lines), []
 
-            # Debug: Imprimir resposta bruta no console para verificação
             print(f"DEBUG - Resposta API para {cod_requisicao_input}:")
             print(json.dumps(resposta_json, indent=2, ensure_ascii=False))
 
@@ -117,12 +111,9 @@ def get_api_data(cod_requisicao_input):
                 output_lines.append(f"**Código da Requisição:** `{dados.get('codRequisicao', 'N/A')}`")
 
                 procedimentos = dados.get("procedimentos", [])
-
-                # Variável para rastrear se encontramos dados detalhados
                 encontrou_detalhes = False
 
                 for procedimento in procedimentos:
-                    # 1. Tenta extrair de 'topografias' (Estrutura Padrão)
                     if "topografias" in procedimento:
                         for topografia in procedimento["topografias"]:
                             encontrou_detalhes = True
@@ -141,21 +132,18 @@ def get_api_data(cod_requisicao_input):
                                         for coloracao in coloracoes:
                                             output_lines.append(f"*   **Coloração:** {coloracao.get('nome', '')}")
 
-                    # 2. Fallback: Tenta procurar chaves direto no procedimento (caso a estrutura mude)
                     if not encontrou_detalhes:
-                         if "laudoMacro" in procedimento:
-                             output_lines.append(f"\n**Laudo Macro:** {procedimento.get('laudoMacro', '')}")
-                             encontrou_detalhes = True
-                         if "diagnosticos" in procedimento:
-                             for diagnostico in procedimento["diagnosticos"]:
+                        if "laudoMacro" in procedimento:
+                            output_lines.append(f"\n**Laudo Macro:** {procedimento.get('laudoMacro', '')}")
+                            encontrou_detalhes = True
+                        if "diagnosticos" in procedimento:
+                            for diagnostico in procedimento["diagnosticos"]:
                                 output_lines.append(f"\n> **Diagnóstico:** {diagnostico.get('titulo', '')}")
                                 output_lines.append(f"> **Laudo Micro:** {diagnostico.get('laudoMicro', '')}")
                                 encontrou_detalhes = True
 
                 procedimentos_cobrados = dados.get("procedimentosCobrados", [])
 
-                # 3. Fallback Final: Se não extraiu quase nada, anexa o JSON bruto dos procedimentos
-                # Isso garante que a IA receba o texto mesmo se nossa lógica de chaves estiver errada
                 if not encontrou_detalhes or len(output_lines) < 5:
                     output_lines.append("\n\n--- DADOS BRUTOS (FALLBACK) ---")
                     output_lines.append("A estrutura esperada não foi encontrada. Segue o JSON bruto para análise:")
@@ -179,9 +167,6 @@ def get_api_data(cod_requisicao_input):
 def generate_ai_response(api_output_text, procedimentos_cobrados):
     """ Gera a análise da IA com base nos dados do laudo. """
     try:
-        model_name = "gemini-2.5-flash"
-        genai_model = GenerativeModel(model_name)
-
         prompt_text = f"""Analise o seguinte laudo de patologia e os procedimentos cobrados pela API. Gere uma tabela Markdown com as colunas 'CodRequisicao', 'Código', 'Quantidade', seguindo as regras abaixo. Responda com a tabela Markdown, e com justificativas curtas.
 
 Regras de Classificação e Contagem:
@@ -217,38 +202,42 @@ Tabela Markdown de Saída (exemplo):
 | 12345 | 40601110 | 1 |
 """
 
-        contents = [Content(role="user", parts=[Part.from_text(text=prompt_text)])]
-        generation_config = GenerationConfig(temperature=0.2, max_output_tokens=8192)
-        safety_settings = [
-            SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_ONLY_HIGH"),
-            SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_ONLY_HIGH"),
-            SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_ONLY_HIGH"),
-            SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_ONLY_HIGH")
-        ]
-
-        responses = genai_model.generate_content(
-            contents=contents,
-            generation_config=generation_config,
-            safety_settings=safety_settings,
-            stream=False,
+        generation_config = types.GenerateContentConfig(
+            temperature=0.2,
+            max_output_tokens=8192,
+            safety_settings=[
+                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_ONLY_HIGH"),
+                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_ONLY_HIGH"),
+                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_ONLY_HIGH"),
+                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_ONLY_HIGH"),
+            ]
         )
 
-        # Acesso seguro à resposta
-        if hasattr(responses, 'candidates') and len(responses.candidates) > 0:
-            candidate = responses.candidates[0]
-            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts') and len(candidate.content.parts) > 0:
-                ai_response_text = candidate.content.parts[0].text
-            else:
-                ai_response_text = "IA não gerou conteúdo de resposta."
-        else:
-            ai_response_text = "Resposta sem candidatos do Vertex AI."
+        max_retries = 4
+        for attempt in range(max_retries):
+            try:
+                _rate_limiter.wait()
+                response = _genai_client.models.generate_content(
+                    # model="gemini-2.5-flash",
+                    model="gemini-3-flash-preview",
+                    contents=prompt_text,
+                    config=generation_config,
+                )
+                ai_response_text = response.text
+                break
+            except google_exceptions.ResourceExhausted:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) * 15  # 15s, 30s, 60s
+                    print(f"DEBUG: 429 ResourceExhausted (tentativa {attempt + 1}/{max_retries}). Aguardando {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise
 
         # Formatação dos procedimentos cobrados para exibição (em Markdown)
         formatted_procedimentos_cobrados = ""
         if isinstance(procedimentos_cobrados, list):
             formatted_procedimentos_cobrados = "### Procedimentos Cobrados (API)\n\n"
             for proc in procedimentos_cobrados:
-                # Verifica se proc é um dicionário antes de chamar .get()
                 if isinstance(proc, dict):
                     formatted_procedimentos_cobrados += (
                         f"*   **Código:** `{proc.get('codigo', '')}`\n"
@@ -284,10 +273,8 @@ def index():
         api_output, procedimentos_cobrados = get_api_data(cod_requisicao_input)
 
         if not api_output.startswith("Erro") and "sem sucesso" not in api_output:
-            # Inicializa Vertex AI se necessário (caso não tenha inicializado no começo)
-            init_vertex_ai()
+            init_genai_client()
             ai_output, proc_output = generate_ai_response(api_output, procedimentos_cobrados)
-            # Converte as respostas de Markdown para HTML
             api_output = markdown.markdown(api_output, extensions=['nl2br'])
             ai_output = markdown.markdown(ai_output, extensions=['tables', 'nl2br'])
             proc_output = markdown.markdown(proc_output, extensions=['nl2br'])

@@ -1,4 +1,4 @@
 flask
 requests
-google-cloud-aiplatform
+google-genai
 markdown
